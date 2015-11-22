@@ -68,22 +68,22 @@ func scanPage(page string, hash string) {
 	// 1. Get screenshot
 	out, err := exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/raster-output", "herzog31/rasterize", page, currentScreen, fmt.Sprintf("%dpx*%dpx", width, height), fmt.Sprintf("%f", scale)).CombinedOutput()
 	if err != nil {
-		log.Fatalf("Error while executing the rasterize container: %v %s", err, out)
+		log.Fatalf("Error while executing the rasterize container for page %s: %v %s", page, err, out)
 	}
 
 	// Compare only if older version exists
 	if _, err := os.Stat("/output/" + oldScreen); err == nil {
 		// 2. Compare current screenshot with old one
-		out, err = exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/images", "herzog31/imagemagick", "compare", "-verbose", "-metric", "AE", oldScreen, currentScreen, diffScreen).CombinedOutput()
+		out, err = exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/images", "herzog31/imagemagick", "compare", "-verbose", "-metric", "AE", "-fuzz", "5%", oldScreen, currentScreen, diffScreen).CombinedOutput()
 		if err != nil {
 			if exiterr, ok := err.(*exec.ExitError); ok {
 				if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 					if status.ExitStatus() != 1 { // ImageMagick Compare return 1 if images are different and 0 if they are the same
-						log.Fatalf("Error while executing the imagemagick container: %v %s", err, out)
+						log.Fatalf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
 					}
 				}
 			} else {
-				log.Fatalf("Error while executing the imagemagick container: %v %s", err, out)
+				log.Fatalf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
 			}
 		}
 
@@ -108,7 +108,7 @@ func scanPage(page string, hash string) {
 			log.Printf("Change of %s detected! (%f%%)\n", page, change*100.0)
 			err := sendNotification(page, "/output/"+diffScreen)
 			if err != nil {
-				log.Fatalf("Error while sending notification: %v\n", err)
+				log.Fatalf("Error while sending notification for page %s: %v\n", page, err)
 			}
 		} else {
 			log.Printf("No change of %s detected.\n", page)
