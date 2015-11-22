@@ -1,44 +1,49 @@
 package main
 
 import (
+	"crypto/md5"
 	"crypto/tls"
 	"fmt"
-	"github.com/aryann/difflib"
-	"io/ioutil"
+	"github.com/scorredoira/email"
 	"log"
 	"net"
-	"net/http"
 	"net/mail"
 	"net/smtp"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 )
 
 var (
-	currentContent      map[string][]string
-	currentContentMutex sync.Mutex
-	pages               []string
-	threshold           uint64
-	interval            uint64
-	smtp_user           string
-	smtp_password       string
-	smtp_host           string
-	smtp_from           string
-	smtp_to             string
+	pages         []string
+	pagesHash     []string
+	threshold     float64
+	width         uint64
+	height        uint64
+	scale         float64
+	interval      uint64
+	smtp_user     string
+	smtp_password string
+	smtp_host     string
+	smtp_from     string
+	smtp_to       string
 )
 
 func main() {
-	currentContent = make(map[string][]string)
 	pages = make([]string, 0)
-	threshold = 1
+	threshold = 0.0
 	interval = 60
+	width = 1280
+	height = 2000
+	scale = 1.0
 
 	parseEnv()
+	prepareHashes()
 
-	go scanPages()
+	scanPages()
 	for range time.Tick(time.Duration(interval) * time.Second) {
 		go scanPages()
 	}
@@ -46,87 +51,110 @@ func main() {
 }
 
 func scanPages() {
-	for _, page := range pages {
-		go scanPage(page)
+	for k, page := range pages {
+		go scanPage(page, pagesHash[k])
 	}
 	return
 }
 
-func scanPage(page string) {
-	log.Printf("Begin scan of %s.\n", page)
+func scanPage(page string, hash string) {
 
-	res, err := http.Get(page)
-	if err != nil {
-		log.Printf("%s: %v", page, err)
-	}
-	if res.StatusCode != 200 {
-		log.Printf("%s: Got status code %d.", page, res.StatusCode)
-	}
-	response, err := ioutil.ReadAll(res.Body)
-	res.Body.Close()
-	if err != nil {
-		log.Printf("%s: %v", page, err)
-	}
-	responseLines := toLines(string(response))
-	previousVersion, ok := currentContent[page]
-	var comparison string
-	if !ok {
-		log.Printf("First scan of %s was successful, no previous data for comparison available.\n", page)
-	} else {
-		comparison = compare(previousVersion, responseLines)
-	}
-	currentContentMutex.Lock()
-	currentContent[page] = responseLines
-	currentContentMutex.Unlock()
+	currentScreen := fmt.Sprintf("%s.png", hash)
+	oldScreen := fmt.Sprintf("%s_old.png", hash)
+	diffScreen := fmt.Sprintf("%s_diff.png", hash)
 
-	if comparison != "" && uint64(len(toLines(comparison))) <= (threshold*2)+1 {
-		log.Printf("Change of %s detected, but does not exceed threshold of %d lines.", page, threshold)
-	} else if comparison != "" {
-		log.Printf("Change of %s detected:\n\n---------------%s\n---------------\n\n", page, comparison)
-		err := sendNotification(page, comparison)
+	log.Printf("Begin scan of %s (%s).\n", page, hash)
+
+	// 1. Get screenshot
+	out, err := exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/raster-output", "herzog31/rasterize", page, currentScreen, fmt.Sprintf("%dpx*%dpx", width, height), fmt.Sprintf("%f", scale)).CombinedOutput()
+	if err != nil {
+		log.Fatalf("Error while executing the rasterize container: %v %s", err, out)
+	}
+
+	// Compare only if older version exists
+	if _, err := os.Stat("/output/" + oldScreen); err == nil {
+		// 2. Compare current screenshot with old one
+		out, err = exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/images", "herzog31/imagemagick", "compare", "-verbose", "-metric", "AE", oldScreen, currentScreen, diffScreen).CombinedOutput()
 		if err != nil {
-			log.Printf("%s: Got error while sending notification %v.", page, err)
+			if exiterr, ok := err.(*exec.ExitError); ok {
+				if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+					if status.ExitStatus() != 1 { // ImageMagick Compare return 1 if images are different and 0 if they are the same
+						log.Fatalf("Error while executing the imagemagick container: %v %s", err, out)
+					}
+				}
+			} else {
+				log.Fatalf("Error while executing the imagemagick container: %v %s", err, out)
+			}
+		}
+
+		// 3. Parse verbose output
+		var diff uint64
+		lines := strings.Split(string(out), "\n")
+		for _, l := range lines {
+			if strings.Contains(l, "all:") {
+				number := strings.Split(l, ":")[1]
+				number = strings.TrimSpace(number)
+				diff, _ = strconv.ParseUint(number, 10, 64)
+			}
+		}
+
+		// 4. Calculate change in percentage
+		change := float64(diff) / float64(height*width)
+
+		// 5. If change > threshold, notify
+		if change > 0 && change < threshold {
+			log.Printf("Change of %s detected (%f%%), but does not exceed threshold of %f%% lines.\n", page, change*100.0, threshold*100.0)
+		} else if change > threshold {
+			log.Printf("Change of %s detected! (%f%%)\n", page, change*100.0)
+			err := sendNotification(page, "/output/"+diffScreen)
+			if err != nil {
+				log.Fatalf("Error while sending notification: %v\n", err)
+			}
+		} else {
+			log.Printf("No change of %s detected.\n", page)
 		}
 	} else {
-		log.Printf("No change of %s detected.\n", page)
+		log.Printf("First scan of %s was successful, no previous screenshot for comparison available.\n", page)
 	}
+
+	// 6. Remove old screenshot & diff
+	if _, err := os.Stat("/output/" + oldScreen); err == nil {
+		err = os.Remove("/output/" + oldScreen)
+		if err != nil {
+			log.Fatalf("Error while removing old screenshot: %v", err)
+		}
+	}
+	if _, err := os.Stat("/output/" + diffScreen); err == nil {
+		err = os.Remove("/output/" + diffScreen)
+		if err != nil {
+			log.Fatalf("Error while removing diff screenshot: %v", err)
+		}
+	}
+
+	// 7. Rename current screenshot
+	err = os.Rename("/output/"+currentScreen, "/output/"+oldScreen)
+	if err != nil {
+		log.Fatalf("Error while renaming current screenshot: %v", err)
+	}
+
 	return
 }
 
-func compare(oldVersion []string, newVersion []string) string {
-	diff := difflib.Diff(oldVersion, newVersion)
-	output := ""
-	for _, v := range diff {
-		if v.Delta == difflib.Common {
-			continue
-		}
-		output += "\n" + v.String()
-	}
-	return output
-}
+func sendNotification(page string, image string) error {
 
-func sendNotification(page string, comparison string) error {
 	from := mail.Address{"", smtp_from}
 	to := mail.Address{"", smtp_to}
-	subj := fmt.Sprintf("Change detected: %s", page)
-	body := fmt.Sprintf("Change on page %s detected:\n\n%s", page, comparison)
 
-	// Setup headers
-	headers := make(map[string]string)
-	headers["From"] = from.String()
-	headers["To"] = to.String()
-	headers["Subject"] = subj
-
-	// Setup message
-	message := ""
-	for k, v := range headers {
-		message += fmt.Sprintf("%s: %s\r\n", k, v)
+	m := email.NewMessage(fmt.Sprintf("Change detected: %s", page), fmt.Sprintf("Change on page %s detected:\n\n", page))
+	m.From = smtp_from
+	m.To = []string{smtp_to}
+	err := m.Attach(image)
+	if err != nil {
+		return err
 	}
-	message += "\r\n" + body
 
 	// Connect to the SMTP Server
 	host, _, _ := net.SplitHostPort(smtp_host)
-
 	auth := smtp.PlainAuth("", smtp_user, smtp_password, host)
 
 	// TLS config
@@ -164,7 +192,7 @@ func sendNotification(page string, comparison string) error {
 		return err
 	}
 
-	_, err = w.Write([]byte(message))
+	_, err = w.Write(m.Bytes())
 	if err != nil {
 		return err
 	}
@@ -202,11 +230,11 @@ func parseEnv() {
 	// Threshold
 	env_threshold := os.Getenv("THRESHOLD")
 	if env_threshold != "" {
-		interval_threshold, err := strconv.ParseUint(env_threshold, 10, 64)
+		threshold_parsed, err := strconv.ParseFloat(env_threshold, 64)
 		if err != nil {
 			log.Fatal("Environment variable THRESHOLD is no valid integer.")
 		}
-		threshold = interval_threshold
+		threshold = threshold_parsed
 	}
 
 	// Mail
@@ -241,6 +269,10 @@ func parseEnv() {
 	smtp_to = env_smtp_to
 }
 
-func toLines(text string) []string {
-	return strings.Split(text, "\n")
+func prepareHashes() {
+	pagesHash = make([]string, len(pages))
+	for k, p := range pages {
+		hash := md5.Sum([]byte(p))
+		pagesHash[k] = fmt.Sprintf("%x", hash)
+	}
 }
