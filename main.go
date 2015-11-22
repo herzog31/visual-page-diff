@@ -52,7 +52,7 @@ func main() {
 
 func scanPages() {
 	for k, page := range pages {
-		go scanPage(page, pagesHash[k])
+		scanPage(page, pagesHash[k])
 	}
 	return
 }
