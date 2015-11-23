@@ -24,6 +24,7 @@ var (
 	width         uint64
 	height        uint64
 	scale         float64
+	fuzz          uint64
 	interval      uint64
 	smtp_user     string
 	smtp_password string
@@ -34,11 +35,6 @@ var (
 
 func main() {
 	pages = make([]string, 0)
-	threshold = 0.0
-	interval = 60
-	width = 1280
-	height = 2000
-	scale = 1.0
 
 	parseEnv()
 	prepareHashes()
@@ -66,7 +62,7 @@ func scanPage(page string, hash string) {
 	log.Printf("Begin scan of %s (%s).\n", page, hash)
 
 	// 1. Get screenshot
-	out, err := exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/raster-output", "herzog31/rasterize", page, currentScreen, fmt.Sprintf("%dpx*%dpx", width, height), fmt.Sprintf("%f", scale)).CombinedOutput()
+	out, err := exec.Command("docker", "run", "--rm", "-v", "/output:/raster-output", "herzog31/rasterize", page, currentScreen, fmt.Sprintf("%dpx*%dpx", width, height), fmt.Sprintf("%f", scale)).CombinedOutput()
 	if err != nil {
 		log.Fatalf("Error while executing the rasterize container for page %s: %v %s", page, err, out)
 	}
@@ -74,7 +70,7 @@ func scanPage(page string, hash string) {
 	// Compare only if older version exists
 	if _, err := os.Stat("/output/" + oldScreen); err == nil {
 		// 2. Compare current screenshot with old one
-		out, err = exec.Command("docker", "run", "--rm", "-v", "/vagrant/output:/images", "herzog31/imagemagick", "compare", "-verbose", "-metric", "AE", "-fuzz", "5%", oldScreen, currentScreen, diffScreen).CombinedOutput()
+		out, err = exec.Command("docker", "run", "--rm", "-v", "/output:/images", "herzog31/imagemagick", "compare", "-verbose", "-metric", "AE", "-fuzz", fmt.Sprintf("%d%%", fuzz), oldScreen, currentScreen, diffScreen).CombinedOutput()
 		if err != nil {
 			if exiterr, ok := err.(*exec.ExitError); ok {
 				if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
@@ -235,6 +231,46 @@ func parseEnv() {
 			log.Fatal("Environment variable THRESHOLD is no valid integer.")
 		}
 		threshold = threshold_parsed
+	}
+
+	// WIDTH
+	env_width := os.Getenv("WIDTH")
+	if env_width != "" {
+		width_parsed, err := strconv.ParseUint(env_width, 10, 64)
+		if err != nil {
+			log.Fatal("Environment variable WIDTH is no valid integer.")
+		}
+		width = width_parsed
+	}
+
+	// HEIGHT
+	env_height := os.Getenv("HEIGHT")
+	if env_height != "" {
+		height_parsed, err := strconv.ParseUint(env_height, 10, 64)
+		if err != nil {
+			log.Fatal("Environment variable HEIGHT is no valid integer.")
+		}
+		height = height_parsed
+	}
+
+	// FUZZ
+	env_fuzz := os.Getenv("FUZZ")
+	if env_fuzz != "" {
+		fuzz_parsed, err := strconv.ParseUint(env_fuzz, 10, 64)
+		if err != nil {
+			log.Fatal("Environment variable FUZZ is no valid integer.")
+		}
+		fuzz = fuzz_parsed
+	}
+
+	// SCALE
+	env_scale := os.Getenv("SCALE")
+	if env_scale != "" {
+		scale_parsed, err := strconv.ParseFloat(env_scale, 64)
+		if err != nil {
+			log.Fatal("Environment variable SCALE is no valid integer.")
+		}
+		scale = scale_parsed
 	}
 
 	// Mail

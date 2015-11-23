@@ -13,8 +13,8 @@ before_install:
 after_success:
   - gox -osarch="$OS_ARCH" -output "dist/{{.OS}}_{{.Arch}}_{{.Dir}}"
   - docker login -e="$DOCKER_EMAIL" -u="$DOCKER_USERNAME" -p="$DOCKER_PASSWORD"
-  - docker build -f Dockerfile -t herzog31/page-diff:latest .
-  - docker push herzog31/page-diff:latest
+  - docker build -f Dockerfile -t herzog31/visual-page-diff:latest .
+  - docker push herzog31/visual-page-diff:latest
 deploy:
   provider: releases
   api-key: "$GITHUB_TOKEN"
