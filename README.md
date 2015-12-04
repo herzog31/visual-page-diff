@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/herzog31/visual-page-diff.svg?branch=master)](https://travis-ci.org/herzog31/visual-page-diff)
+[![Docker Hub](https://img.shields.io/docker/pulls/herzog31/visual-page-diff.svg)](https://hub.docker.com/r/herzog31/visual-page-diff)
+
 # visual-page-diff
 Visual Page Diff tool, written in Go
 
