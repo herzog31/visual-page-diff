@@ -64,7 +64,8 @@ func scanPage(page string, hash string) {
 	// 1. Get screenshot
 	out, err := exec.Command("docker", "run", "--rm", "-v", "/output:/raster-output", "herzog31/rasterize", page, currentScreen, fmt.Sprintf("%dpx*%dpx", width, height), fmt.Sprintf("%f", scale)).CombinedOutput()
 	if err != nil {
-		log.Fatalf("Error while executing the rasterize container for page %s: %v %s", page, err, out)
+		log.Printf("Error while executing the rasterize container for page %s: %v %s", page, err, out)
+		return
 	}
 
 	// Compare only if older version exists
@@ -75,11 +76,13 @@ func scanPage(page string, hash string) {
 			if exiterr, ok := err.(*exec.ExitError); ok {
 				if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 					if status.ExitStatus() != 1 { // ImageMagick Compare return 1 if images are different and 0 if they are the same
-						log.Fatalf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
+						log.Printf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
+						return
 					}
 				}
 			} else {
-				log.Fatalf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
+				log.Printf("Error while executing the imagemagick container for page %s: %v %s", page, err, out)
+				return
 			}
 		}
 
@@ -104,7 +107,8 @@ func scanPage(page string, hash string) {
 			log.Printf("Change of %s detected! (%f%%)\n", page, change*100.0)
 			err := sendNotification(page, "/output/"+diffScreen)
 			if err != nil {
-				log.Fatalf("Error while sending notification for page %s: %v\n", page, err)
+				log.Printf("Error while sending notification for page %s: %v\n", page, err)
+				return
 			}
 		} else {
 			log.Printf("No change of %s detected.\n", page)
@@ -117,20 +121,23 @@ func scanPage(page string, hash string) {
 	if _, err := os.Stat("/output/" + oldScreen); err == nil {
 		err = os.Remove("/output/" + oldScreen)
 		if err != nil {
-			log.Fatalf("Error while removing old screenshot: %v", err)
+			log.Printf("Error while removing old screenshot: %v", err)
+			return
 		}
 	}
 	if _, err := os.Stat("/output/" + diffScreen); err == nil {
 		err = os.Remove("/output/" + diffScreen)
 		if err != nil {
-			log.Fatalf("Error while removing diff screenshot: %v", err)
+			log.Printf("Error while removing diff screenshot: %v", err)
+			return
 		}
 	}
 
 	// 7. Rename current screenshot
 	err = os.Rename("/output/"+currentScreen, "/output/"+oldScreen)
 	if err != nil {
-		log.Fatalf("Error while renaming current screenshot: %v", err)
+		log.Printf("Error while renaming current screenshot: %v", err)
+		return
 	}
 
 	return
